@@ -25,7 +25,7 @@ import praw
 class StatBot:
     def __init__(self,sub):
         self.sub = sub
-        self.replyFooter = '\n\n^^I ^^am ^^a ^^bot. ^^[[source](https://github.com/toddrob99/MLB-StatBot)] ^^[[feedback](https://reddit.com/message/compose?to=toddrob&subject=mlb-bot&message=)]'
+        self.replyFooter = '\n\n^^I ^^am ^^a ^^bot. ^^[[source/doc](https://github.com/toddrob99/MLB-StatBot)] ^^[[feedback](https://reddit.com/message/compose?to=toddrob&subject=mlb-bot&message=)]'
         print('StatBot starting up...')
         reddit_clientId = None
         reddit_clientSecret = None
