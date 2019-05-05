@@ -25,12 +25,15 @@ import praw
 class StatBot:
     def __init__(self,sub):
         self.sub = sub
-        self.replyFooter = '\n\n^^I ^^am ^^a ^^bot. ^^[[source/doc](https://github.com/toddrob99/MLB-StatBot)] ^^[[feedback](https://reddit.com/message/compose?to=toddrob&subject=mlb-bot&message=)]'
+        self.replyFooter = '\n\n^^I ^^am ^^a ^^bot. ^^Not ^^affiliated ^^with ^^MLB. ^^Downvoted ^^replies ^^will ^^be ^^deleted. ^^[[source/doc](https://github.com/toddrob99/MLB-StatBot)] ^^[[feedback](https://np.reddit.com/message/compose?to=toddrob&subject=mlb-bot&message=)]'
+        self.del_threshold = -2
+        self.pause_after = 5
+        self.comments = {}
         print('StatBot starting up...')
         reddit_clientId = None
         reddit_clientSecret = None
         reddit_refreshToken = None
-        
+
         while not reddit_clientId and not reddit_clientSecret and not reddit_refreshToken:
             try:
                 import auth
@@ -91,21 +94,35 @@ class StatBot:
             print('Reddit authentication failure. Please check the values in auth.py and try again. Error message: {}'.format(e))
 
     def run(self):
+        self.startup = time.time()
         while True:
             print('Monitoring comments in the following subreddit(s): {}...'.format(self.sub))
-            for comment in self.r.subreddit(self.sub).stream.comments(skip_existing=True):
+            for comment in self.r.subreddit(self.sub).stream.comments(pause_after=self.pause_after):
+                if not comment:
+                    break #take a break to check for downvoted replies and delete
+                if comment.id in self.comments.keys():
+                    print('Already processed comment {}'.format(comment.id))
+                    continue
+                if int(comment.created_utc) < int(self.startup):
+                    print('Ignoring old comment {}'.format(comment.id))
+                    self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : datetime.now(), 'cmd' : [], 'too_old' : True}})
+                    continue
+                replyText = ''
                 if str(self.r.user.me()).lower() in comment.body.lower() and comment.author != self.r.user.me():
-                    print('({}) {} - {}: {}\n'.format(comment.subreddit, comment.id, comment.author, comment.body))
+                    self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : datetime.now(), 'cmd' : []}})
+                    print('({}) {} - {}: {}'.format(comment.subreddit, comment.id, comment.author, comment.body))
                     if 'help' in comment.body.lower():
-                        replyText = 'Invoke me by including my name anywhere in your comment.\n\n'
+                        self.comments[comment.id]['cmd'].append('help')
+                        replyText += 'Invoke me by including my name anywhere in your comment.\n\n'
                         replyText += 'Include an available command in your comment: [help, score, careerstats, seasonstats, standings, winprob], '
                         replyText += 'along with the subject in curly brackets.\n\n'
                         replyText += 'For stats commands, you can also include the type: [hitting, pitching, fielding].\n\n'
                         replyText += 'For example, `careerstats {hamels} pitching` or `score {phillies}` or `standings {nle}` '
                         replyText += '(try including the word wildcard when asking for standings).\n\n'
                         replyText += 'I am currently monitoring the following subreddit(s): ' + self.sub + '.'
-                        comment.reply(replyText + self.replyFooter)
-                    elif 'seasonstats' in comment.body.lower():
+                    if 'seasonstats' in comment.body.lower():
+                        self.comments[comment.id]['cmd'].append('seasonstats')
+                        if replyText != '': replyText += '\n\n*****\n\n'
                         try:
                             who = statsapi.lookup_player(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
                             what = []
@@ -116,11 +133,13 @@ class StatBot:
                                 stats = statsapi.player_stats(who,str(what).replace('\'','').replace(' ',''),'season')
                             else:
                                 stats = statsapi.player_stats(who,type='season')
-                            replyText = '\n    ' + stats.replace('\n','\n    ')
-                            comment.reply(replyText + self.replyFooter)
+                            replyText += '\n    ' + stats.replace('\n','\n    ')
                         except Exception as e:
-                            print('Error replying to comment: {}'.format(e))
-                    elif 'careerstats' in comment.body.lower():
+                            print('Error generating response to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                    if 'careerstats' in comment.body.lower():
+                        self.comments[comment.id]['cmd'].append('careerstats')
+                        if replyText != '': replyText += '\n\n*****\n\n'
                         try:
                             who = statsapi.lookup_player(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
                             what = []
@@ -131,29 +150,49 @@ class StatBot:
                                 stats = statsapi.player_stats(who,str(what).replace('\'','').replace(' ',''),'career')
                             else:
                                 stats = statsapi.player_stats(who,type='career')
-                            replyText = '\n    ' + stats.replace('\n','\n    ')
-                            comment.reply(replyText + self.replyFooter)
+                            replyText += '\n    ' + stats.replace('\n','\n    ')
                         except Exception as e:
-                            print('Error replying to comment: {}'.format(e))
-                    elif 'nextgame' in comment.body.lower():
+                            print('Error generating response to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                    if 'nextgame' in comment.body.lower():
+                        self.comments[comment.id]['cmd'].append('nextgame')
+                        if replyText != '': replyText += '\n\n*****\n\n'
                         try:
                             who = statsapi.lookup_team(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
                             next = statsapi.next_game(who)
                             game = statsapi.schedule(game_id=next)
-                            replyText = game[0]['summary']
-                            comment.reply(replyText + self.replyFooter)
+                            replyText += game[0]['summary']
                         except Exception as e:
-                            print('Error replying to comment: {}'.format(e))
-                    elif 'lastgame' in comment.body.lower():
+                            print('Error generating response to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                    if 'lastgame' in comment.body.lower():
+                        self.comments[comment.id]['cmd'].append('lastgame')
+                        if replyText != '': replyText += '\n\n*****\n\n'
                         try:
                             who = statsapi.lookup_team(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
                             last = statsapi.last_game(who)
                             game = statsapi.schedule(game_id=last)
-                            replyText = game[0]['summary']
-                            comment.reply(replyText + self.replyFooter)
+                            replyText += game[0]['summary']
                         except Exception as e:
-                            print('Error replying to comment: {}'.format(e))
-                    elif 'score' in comment.body.lower():
+                            print('Error generating response to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                    if 'winprob' in comment.body.lower():
+                        self.comments[comment.id]['cmd'].append('winprob')
+                        if replyText != '': replyText += '\n\n*****\n\n'
+                        try:
+                            who = statsapi.lookup_team(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
+                            game = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),team=who)[0]
+                            contextMetrics = statsapi.get('game_contextMetrics',{'gamePk':game['game_id']})
+                            away_win_prob = contextMetrics.get('awayWinProbability','-')
+                            home_win_prob = contextMetrics.get('homeWinProbability','-')
+                            replyText += '\n    ' + game['summary'] + '\n'
+                            replyText += '    Current win probabilities: ' + game['away_name'] + ' ' + str(away_win_prob) + '%, ' + game['home_name'] + ' ' + str(home_win_prob) + '%'
+                        except Exception as e:
+                            print('Error generating response to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                    if 'score' in comment.body.lower() and 'Current win probabilities' not in replyText:
+                        self.comments[comment.id]['cmd'].append('score')
+                        if replyText != '': replyText += '\n\n*****\n\n'
                         try:
                             who = comment.body[comment.body.find('{')+1:comment.body.find('}')].lower()
                             if who in ['nle','nlw','nlc','ale','alw','alc','all']:
@@ -164,17 +203,18 @@ class StatBot:
                                 if len(gamePks):
                                     if gamePks[-1] == ',': gamePks = gamePks[:-1]
                                 games = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),game_id=gamePks)
-                                replyText = ''
                                 for game in games:
                                     replyText += '\n    ' + game['summary']
                             else:
                                 who = statsapi.lookup_team(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
                                 game = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),team=who)
-                                replyText = game[0]['summary']
-                            comment.reply(replyText + self.replyFooter)
+                                replyText += game[0]['summary']
                         except Exception as e:
-                            print('Error replying to comment: {}'.format(e))
-                    elif 'standings' in comment.body.lower():
+                            print('Error generating response to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                    if 'standings' in comment.body.lower():
+                        self.comments[comment.id]['cmd'].append('standings')
+                        if replyText != '': replyText += '\n\n*****\n\n'
                         try:
                             if comment.body.find('{') != -1:
                                 who = comment.body[comment.body.find('{')+1:comment.body.find('}')].lower()
@@ -187,22 +227,27 @@ class StatBot:
                             elif who in ['nl','al']:
                                 leagueId = 103 if who=='al' else 104
                                 standings = statsapi.standings(leagueId=leagueId,date=datetime.today().strftime('%m/%d/%Y'),include_wildcard=wc)
-                            replyText = '\n    {}'.format(standings.replace('\n','\n    '))
-                            comment.reply(replyText + self.replyFooter)
+                            replyText += '\n    {}'.format(standings.replace('\n','\n    '))
                         except Exception as e:
-                            print('Error replying to comment: {}'.format(e))
-                    elif 'winprob' in comment.body.lower():
+                            print('Error generating response to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+
+                    if replyText != '':
                         try:
-                            who = statsapi.lookup_team(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
-                            game = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),team=who)[0]
-                            contextMetrics = statsapi.get('game_contextMetrics',{'gamePk':game['game_id']})
-                            away_win_prob = contextMetrics.get('awayWinProbability','-')
-                            home_win_prob = contextMetrics.get('homeWinProbability','-')
-                            replyText = '\n    ' + game['summary'] + '\n'
-                            replyText += '    Current win probabilities: ' + game['away_name'] + ' ' + str(away_win_prob) + '%, ' + game['home_name'] + ' ' + str(home_win_prob) + '%'
-                            comment.reply(replyText + self.replyFooter)
+                            latest_reply = comment.reply(replyText + self.replyFooter)
+                            self.comments[comment.id].update({'reply' : latest_reply})
+                            latest_reply.disable_inbox_replies()
+                            print('Replied with comment id {} and disabled inbox replies.'.format(latest_reply))
                         except Exception as e:
                             print('Error replying to comment: {}'.format(e))
+                            self.comments[comment.id].update({'result' : 'Error submitting comment or disabling inbox replies: {}'.format(e)})
+
+            print('Checking for downvotes on {} replies...'.format(sum(1 for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed'))))
+            for x in (x for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed')):
+                if self.comments[x]['reply'].score <= self.del_threshold:
+                    print('Deleting comment {} with score ({}) at or below threshold ({})...'.format(self.comments[x]['reply'], self.comments[x]['reply'].score, self.del_threshold))
+                    self.comments[x]['reply'].delete()
+                    self.comments[x].update({'removed':datetime.now()})
 
         return
 
