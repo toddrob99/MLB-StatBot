@@ -21,6 +21,8 @@ from datetime import datetime,timedelta
 import time
 import statsapi
 import praw
+import os
+import sqlite3
 
 class StatBot:
     def __init__(self,sub):
@@ -64,14 +66,13 @@ class StatBot:
                 webbrowser.open(url)
                 reddit_authCode = input('Enter the code from the address bar of your browser, everything after code=')
                 reddit_refreshToken = r.auth.authorize(reddit_authCode)
-                import os
                 try:
                     f = open(os.path.dirname(os.path.realpath(__file__)) + '/auth.py', 'w+')
                     f.write("#!/usr/bin/env python\nreddit_clientId='{}'\nreddit_clientSecret='{}'\nreddit_refreshToken='{}'\n".format(reddit_clientId,reddit_clientSecret,reddit_refreshToken))
                     f.close()
                 except Exception as e:
                     print('Error writing authentication info to auth.py: {}'.format(e))
-            import os
+
             try:
                 f = open(os.path.dirname(os.path.realpath(__file__)) + '/auth.py', 'w+')
                 f.write("#!/usr/bin/env python\nreddit_clientId='{}'\nreddit_clientSecret='{}'\nreddit_refreshToken='{}'\n".format(reddit_clientId,reddit_clientSecret,reddit_refreshToken))
@@ -93,23 +94,54 @@ class StatBot:
         except Exception as e:
             print('Reddit authentication failure. Please check the values in auth.py and try again. Error message: {}'.format(e))
 
+        try:
+            self.db = sqlite3.connect(os.path.dirname(os.path.realpath(__file__)) + '/statbot.db')
+            #self.db.set_trace_callback(print)
+            """Local sqlite database to store info about processed comments"""
+        except sqlite3.Error as e:
+            print('Error connecting to database: {}'.format(e))
+            return None
+
+        self.dbc = self.db.cursor()
+        self.dbc.execute('''CREATE TABLE IF NOT EXISTS comments (
+                            comment_id text PRIMARY KEY,
+                            sub text NOT NULL,
+                            author text NOT NULL,
+                            post text NOT NULL,
+                            date text NOT NULL,
+                            cmd text,
+                            errors text,
+                            reply text,
+                            removed integer,
+                            score integer
+                        );''')
+        self.db.commit()
+
+    def __del__(self):
+        try:
+            print('Closing DB connection.')
+            self.db.close()
+        except sqlite3.Error as e:
+            print('Error closing database connection: {}'.format(e))
+
     def run(self):
-        self.startup = time.time()
+        self.dbc.execute('SELECT comment_id,date,reply FROM comments ORDER BY date DESC LIMIT 500;')
+        comment_ids = self.dbc.fetchall()
+        for cid in comment_ids:
+            self.comments.update({cid[0] : {'date' : cid[1], 'reply' : cid[2], 'historical' : True}})
+
         while True:
             print('Monitoring comments in the following subreddit(s): {}...'.format(self.sub))
             for comment in self.r.subreddit(self.sub).stream.comments(pause_after=self.pause_after):
                 if not comment:
-                    break #take a break to check for downvoted replies and delete
+                    break #take a break to delete downvoted replies
                 if comment.id in self.comments.keys():
                     print('Already processed comment {}'.format(comment.id))
                     continue
-                if int(comment.created_utc) < int(self.startup):
-                    print('Ignoring old comment {}'.format(comment.id))
-                    self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : datetime.now(), 'cmd' : [], 'too_old' : True}})
-                    continue
                 replyText = ''
                 if str(self.r.user.me()).lower() in comment.body.lower() and comment.author != self.r.user.me():
-                    self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : datetime.now(), 'cmd' : []}})
+                    self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : datetime.now(), 'cmd' : [], 'errors' : []}})
+                    self.dbc.execute("insert or ignore into comments (comment_id, sub, author, post, date) values (?, ?, ?, ?, ?);", (str(comment.id), str(comment.subreddit), str(comment.author), str(comment.submission), str(comment.created_utc)))
                     print('({}) {} - {}: {}'.format(comment.subreddit, comment.id, comment.author, comment.body))
                     if 'help' in comment.body.lower():
                         self.comments[comment.id]['cmd'].append('help')
@@ -135,8 +167,8 @@ class StatBot:
                                 stats = statsapi.player_stats(who,type='season')
                             replyText += '\n    ' + stats.replace('\n','\n    ')
                         except Exception as e:
-                            print('Error generating response to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                            print('Error generating response for seasonstats: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error generating response for seasonstats: {}'.format(e))
                     if 'careerstats' in comment.body.lower():
                         self.comments[comment.id]['cmd'].append('careerstats')
                         if replyText != '': replyText += '\n\n*****\n\n'
@@ -152,8 +184,8 @@ class StatBot:
                                 stats = statsapi.player_stats(who,type='career')
                             replyText += '\n    ' + stats.replace('\n','\n    ')
                         except Exception as e:
-                            print('Error generating response to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                            print('Error generating response for careerstats: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error generating response for careerstats: {}'.format(e))
                     if 'nextgame' in comment.body.lower():
                         self.comments[comment.id]['cmd'].append('nextgame')
                         if replyText != '': replyText += '\n\n*****\n\n'
@@ -163,8 +195,8 @@ class StatBot:
                             game = statsapi.schedule(game_id=next)
                             replyText += game[0]['summary']
                         except Exception as e:
-                            print('Error generating response to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                            print('Error generating response for nextgame: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error generating response for nextgame: {}'.format(e))
                     if 'lastgame' in comment.body.lower():
                         self.comments[comment.id]['cmd'].append('lastgame')
                         if replyText != '': replyText += '\n\n*****\n\n'
@@ -174,8 +206,8 @@ class StatBot:
                             game = statsapi.schedule(game_id=last)
                             replyText += game[0]['summary']
                         except Exception as e:
-                            print('Error generating response to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                            print('Error generating response for lastgame: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error generating response for lastgame: {}'.format(e))
                     if 'winprob' in comment.body.lower():
                         self.comments[comment.id]['cmd'].append('winprob')
                         if replyText != '': replyText += '\n\n*****\n\n'
@@ -188,8 +220,8 @@ class StatBot:
                             replyText += '\n    ' + game['summary'] + '\n'
                             replyText += '    Current win probabilities: ' + game['away_name'] + ' ' + str(away_win_prob) + '%, ' + game['home_name'] + ' ' + str(home_win_prob) + '%'
                         except Exception as e:
-                            print('Error generating response to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                            print('Error generating response for winprob: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error generating response for winprob: {}'.format(e))
                     if 'score' in comment.body.lower() and 'Current win probabilities' not in replyText:
                         self.comments[comment.id]['cmd'].append('score')
                         if replyText != '': replyText += '\n\n*****\n\n'
@@ -210,8 +242,8 @@ class StatBot:
                                 game = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),team=who)
                                 replyText += game[0]['summary']
                         except Exception as e:
-                            print('Error generating response to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                            print('Error generating response for score: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error generating response for score: {}'.format(e))
                     if 'standings' in comment.body.lower():
                         self.comments[comment.id]['cmd'].append('standings')
                         if replyText != '': replyText += '\n\n*****\n\n'
@@ -229,8 +261,8 @@ class StatBot:
                                 standings = statsapi.standings(leagueId=leagueId,date=datetime.today().strftime('%m/%d/%Y'),include_wildcard=wc)
                             replyText += '\n    {}'.format(standings.replace('\n','\n    '))
                         except Exception as e:
-                            print('Error generating response to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error generating response: {}'.format(e)})
+                            print('Error generating response for standings: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error generating response for standings: {}'.format(e))
 
                     if replyText != '':
                         try:
@@ -238,16 +270,27 @@ class StatBot:
                             self.comments[comment.id].update({'reply' : latest_reply})
                             latest_reply.disable_inbox_replies()
                             print('Replied with comment id {} and disabled inbox replies.'.format(latest_reply))
+                            self.dbc.execute("update comments set cmd=?,reply=? where comment_id=?;", (str(self.comments[comment.id]['cmd']), str(latest_reply), str(comment.id)))
                         except Exception as e:
-                            print('Error replying to comment: {}'.format(e))
-                            self.comments[comment.id].update({'result' : 'Error submitting comment or disabling inbox replies: {}'.format(e)})
+                            print('Error replying to comment or disabling inbox replies: {}'.format(e))
+                            self.comments[comment.id]['errors'].append('Error submitting comment or disabling inbox replies: {}'.format(e))
 
-            print('Checking for downvotes on {} replies...'.format(sum(1 for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed'))))
-            for x in (x for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed')):
+                    if len(self.comments[comment.id].get('errors')):
+                        self.dbc.execute("update comments set errors=? where comment_id=?;", (str(self.comments[comment.id].get('errors')), str(comment.id)))
+                    self.db.commit()
+
+            print('Checking for downvotes on {} replies...'.format(sum(1 for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed') and not self.comments[x].get('historical'))))
+            for x in (x for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed') and not self.comments[x].get('historical')):
                 if self.comments[x]['reply'].score <= self.del_threshold:
                     print('Deleting comment {} with score ({}) at or below threshold ({})...'.format(self.comments[x]['reply'], self.comments[x]['reply'].score, self.del_threshold))
-                    self.comments[x]['reply'].delete()
-                    self.comments[x].update({'removed':datetime.now()})
+                    try:
+                        self.comments[x]['reply'].delete()
+                        self.comments[x].update({'removed':datetime.now()})
+                        self.dbc.execute("update comments set removed=? where comment_id=?;", (str(self.comments[x].get('removed')), str(x)))
+                    except Exception as e:
+                        print('Error deleting downvoted comment: {}'.format(e))
+                        self.comments[x]['errors'].append('Error deleting downvoted comment: {}'.format(e))
+            self.db.commit()
 
         return
 
