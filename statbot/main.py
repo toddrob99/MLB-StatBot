@@ -140,7 +140,7 @@ class StatBot:
                     continue
                 replyText = ''
                 if str(self.r.user.me()).lower() in comment.body.lower() and comment.author != self.r.user.me():
-                    self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : datetime.now(), 'cmd' : [], 'errors' : []}})
+                    self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : time.time(), 'cmd' : [], 'errors' : []}})
                     self.dbc.execute("insert or ignore into comments (comment_id, sub, author, post, date) values (?, ?, ?, ?, ?);", (str(comment.id), str(comment.subreddit), str(comment.author), str(comment.submission), str(comment.created_utc)))
                     print('({}) {} - {}: {}'.format(comment.subreddit, comment.id, comment.author, comment.body))
                     if 'help' in comment.body.lower():
@@ -285,7 +285,7 @@ class StatBot:
                     print('Deleting comment {} with score ({}) at or below threshold ({})...'.format(self.comments[x]['reply'], self.comments[x]['reply'].score, self.del_threshold))
                     try:
                         self.comments[x]['reply'].delete()
-                        self.comments[x].update({'removed':datetime.now()})
+                        self.comments[x].update({'removed':time.time()})
                         self.dbc.execute("update comments set removed=? where comment_id=?;", (str(self.comments[x].get('removed')), str(x)))
                     except Exception as e:
                         print('Error deleting downvoted comment: {}'.format(e))
