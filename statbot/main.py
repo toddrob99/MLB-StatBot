@@ -213,7 +213,7 @@ class StatBot:
                         if replyText != '': replyText += '\n\n*****\n\n'
                         try:
                             who = statsapi.lookup_team(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
-                            game = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),team=who)[0]
+                            game = statsapi.schedule(team=who)[0]
                             contextMetrics = statsapi.get('game_contextMetrics',{'gamePk':game['game_id']})
                             away_win_prob = contextMetrics.get('awayWinProbability','-')
                             home_win_prob = contextMetrics.get('homeWinProbability','-')
@@ -234,12 +234,12 @@ class StatBot:
                                     gamePks += '{},'.format(i)
                                 if len(gamePks):
                                     if gamePks[-1] == ',': gamePks = gamePks[:-1]
-                                games = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),game_id=gamePks)
+                                games = statsapi.schedule(game_id=gamePks)
                                 for game in games:
                                     replyText += '\n    ' + game['summary']
                             else:
                                 who = statsapi.lookup_team(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
-                                game = statsapi.schedule(date=datetime.today().strftime('%m/%d/%Y'),team=who)
+                                game = statsapi.schedule(team=who)
                                 replyText += game[0]['summary']
                         except Exception as e:
                             print('Error generating response for score: {}'.format(e))
