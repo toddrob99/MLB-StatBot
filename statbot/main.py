@@ -294,6 +294,22 @@ class StatBot:
 
         return
 
+    def lookup_player(self, keyword):
+        """Check statsapi.lookup_player() and if no results, try other MLB source.
+        Stats API only returns active players.
+        """
+        players = statsapi.lookup_player(keyword)
+        if len(players): return players[0]['id']
+        else:
+            print('Looking up player from alternate MLB source...')
+            import requests
+            r = requests.get('http://lookup-service-prod.mlb.com/json/named.search_player_all.bam?sport_code=%27mlb%27&name_part=%27{}%25%27'.format(keyword))
+            if r.status_code not in [200,201]:
+                print('Error looking up player from alternate MLB source. Status code: {}.'.format(r.status_code))
+                return ''
+            else:
+                return r.json()['search_player_all']['queryResults']['row']['player_id'] if r.json()['search_player_all']['queryResults']['totalSize']=='1' else r.json()['search_player_all']['queryResults']['row'][0]['player_id']
+
 if __name__=='__main__':
     if len(sys.argv)>1:
         sub = sys.argv[1]
