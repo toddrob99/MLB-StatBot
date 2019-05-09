@@ -173,7 +173,7 @@ class StatBot:
                         self.comments[comment.id]['cmd'].append('careerstats')
                         if replyText != '': replyText += '\n\n*****\n\n'
                         try:
-                            who = statsapi.lookup_player(comment.body[comment.body.find('{')+1:comment.body.find('}')])[0]['id']
+                            who = self.lookup_player(comment.body[comment.body.find('{')+1:comment.body.find('}')])
                             what = []
                             if 'hitting' in comment.body.lower() or 'batting' in comment.body.lower(): what.append('hitting')
                             if 'pitching' in comment.body.lower(): what.append('pitching')
