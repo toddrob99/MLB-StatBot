@@ -30,6 +30,8 @@ Invoke the bot in a monitored subreddit by including the bot's reddit username i
 
 Include a command, subject, and qualifier as needed, and the bot will reply with the requested data.
 
+Downvoted replies will be deleted automatically.
+
 ## Commands
 
 ### help
@@ -110,4 +112,4 @@ Example: `botname winprob {phi}`
 
 ## Copyright Notice
 
-This project uses the MLB-StatsAPI and PRAW packages to interface with the MLB and Reddit APIs. Use of MLB data is subject to the notice posted at http://gdx.mlb.com/components/copyright.txt.
+This package and its author are not affiliated with MLB or any MLB team. This project uses the MLB-StatsAPI and PRAW packages to interface with the MLB and Reddit APIs. Use of MLB data is subject to the notice posted at http://gdx.mlb.com/components/copyright.txt.
