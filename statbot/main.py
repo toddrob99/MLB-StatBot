@@ -23,6 +23,7 @@ import statsapi
 import praw
 import os
 import sqlite3
+import requests
 
 class StatBot:
     def __init__(self,sub):
@@ -301,8 +302,6 @@ class StatBot:
         players = statsapi.lookup_player(keyword)
         if len(players): return players[0]['id']
         else:
-            print('Looking up player from alternate MLB source...')
-            import requests
             r = requests.get('http://lookup-service-prod.mlb.com/json/named.search_player_all.bam?sport_code=%27mlb%27&name_part=%27{}%25%27'.format(keyword))
             if r.status_code not in [200,201]:
                 print('Error looking up player from alternate MLB source. Status code: {}.'.format(r.status_code))
