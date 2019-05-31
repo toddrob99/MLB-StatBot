@@ -30,6 +30,7 @@ class StatBot:
         self.sub = sub
         self.replyFooter = '\n\n^^I ^^am ^^a ^^bot. ^^Not ^^affiliated ^^with ^^MLB. ^^Downvoted ^^replies ^^will ^^be ^^deleted. ^^[[source/doc](https://github.com/toddrob99/MLB-StatBot)] ^^[[feedback](https://np.reddit.com/message/compose?to=toddrob&subject=mlb-bot&message=)]'
         self.del_threshold = -2
+        self.historicalDays = 1
         self.pause_after = 5
         self.comments = {}
         print('StatBot starting up...')
@@ -113,8 +114,7 @@ class StatBot:
                             cmd text,
                             errors text,
                             reply text,
-                            removed integer,
-                            score integer
+                            removed integer
                         );''')
         self.db.commit()
 
@@ -126,21 +126,25 @@ class StatBot:
             print('Error closing database connection: {}'.format(e))
 
     def run(self):
-        self.dbc.execute('SELECT comment_id,date,reply FROM comments ORDER BY date DESC LIMIT 500;')
+        self.dbc.execute('SELECT comment_id, date, reply, errors FROM comments ORDER BY date DESC LIMIT 500;')
         comment_ids = self.dbc.fetchall()
         for cid in comment_ids:
-            self.comments.update({cid[0] : {'date' : cid[1], 'reply' : cid[2], 'historical' : True}})
+            self.comments.update({cid[0] : {'date' : cid[1], 'reply' : self.r.comment(cid[2]) if cid[2] else None, 'errors' : cid[3], 'historical' : True}})
 
         while True:
             print('Monitoring comments in the following subreddit(s): {}...'.format(self.sub))
             for comment in self.r.subreddit(self.sub).stream.comments(pause_after=self.pause_after):
                 if not comment:
                     break #take a break to delete downvoted replies
-                if comment.id in self.comments.keys():
-                    print('Already processed comment {}'.format(comment.id))
-                    continue
                 replyText = ''
                 if str(self.r.user.me()).lower() in comment.body.lower() and comment.author != self.r.user.me():
+                    if comment.id in self.comments.keys():
+                        print('Already processed comment {}'.format(comment.id))
+                        continue
+                    elif comment.created_utc <= time.time()-60*60*24*self.historicalDays:
+                        print('Stream returned comment {} which is older than the historical days setting, ignoring...')
+                        self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : time.time(), 'cmd' : [], 'errors' : []}})
+                        continue
                     self.comments.update({comment.id : {'sub' : comment.subreddit, 'author' : comment.author, 'post' : comment.submission, 'date' : time.time(), 'cmd' : [], 'errors' : []}})
                     self.dbc.execute("insert or ignore into comments (comment_id, sub, author, post, date) values (?, ?, ?, ?, ?);", (str(comment.id), str(comment.subreddit), str(comment.author), str(comment.submission), str(comment.created_utc)))
                     print('({}) {} - {}: {}'.format(comment.subreddit, comment.id, comment.author, comment.body))
@@ -280,17 +284,27 @@ class StatBot:
                         self.dbc.execute("update comments set errors=? where comment_id=?;", (str(self.comments[comment.id].get('errors')), str(comment.id)))
                     self.db.commit()
 
-            print('Checking for downvotes on {} replies...'.format(sum(1 for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed') and not self.comments[x].get('historical'))))
-            for x in (x for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed') and not self.comments[x].get('historical')):
-                if self.comments[x]['reply'].score <= self.del_threshold:
-                    print('Deleting comment {} with score ({}) at or below threshold ({})...'.format(self.comments[x]['reply'], self.comments[x]['reply'].score, self.del_threshold))
-                    try:
-                        self.comments[x]['reply'].delete()
+            print('Checking for downvotes on {} replies...'.format(sum(1 for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed') and float(self.comments[x].get('date'))>=time.time()-60*60*24*self.historicalDays)))
+            for x in (x for x in self.comments if self.comments[x].get('reply') and not self.comments[x].get('removed') and float(self.comments[x].get('date'))>=time.time()-60*60*24*self.historicalDays):
+                #print('Submission: {}, reply: {}'.format(self.r.comment(x).submission, self.comments[x]['reply']))
+                try:
+                    self.comments[x]['reply'].refresh()
+                except praw.exceptions.ClientException as e:
+                    print('Error refreshing attributes for comment reply {}: {}'.format(self.comments[x]['reply'], e))
+                    if 'comment does not appear to be in the comment tree' in str(e):
                         self.comments[x].update({'removed':time.time()})
                         self.dbc.execute("update comments set removed=? where comment_id=?;", (str(self.comments[x].get('removed')), str(x)))
-                    except Exception as e:
-                        print('Error deleting downvoted comment: {}'.format(e))
-                        self.comments[x]['errors'].append('Error deleting downvoted comment: {}'.format(e))
+
+                if not self.comments[x].get('removed'):
+                    if self.comments[x]['reply'].score <= self.del_threshold:
+                        print('Deleting comment {} with score ({}) at or below threshold ({})...'.format(self.comments[x]['reply'], self.comments[x]['reply'].score, self.del_threshold))
+                        try:
+                            self.comments[x]['reply'].delete()
+                            self.comments[x].update({'removed':time.time()})
+                            self.dbc.execute("update comments set removed=? where comment_id=?;", (str(self.comments[x].get('removed')), str(x)))
+                        except Exception as e:
+                            print('Error deleting downvoted comment: {}'.format(e))
+                            self.comments[x]['errors'].append('Error deleting downvoted comment: {}'.format(e))
             self.db.commit()
 
         return
